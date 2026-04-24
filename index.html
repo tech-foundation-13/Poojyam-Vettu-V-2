@@ -1382,7 +1382,7 @@ function updateOnlineLobbyUI(){
 
   const playerMarkup=onlineRoomState.players.map((player,index)=>{
     const badges=[];
-    if(player.isBot) badges.push("Bot");
+    if(player.isBot) badges.push("AI");
     if(player.id===socket.id) badges.push("You");
     if(!player.isBot && player.id===onlineRoomState.hostId) badges.push("Host");
     if(onlineRoomState.started && player.id===currentTurnId) badges.push("Turn");
@@ -1600,6 +1600,7 @@ socket.on("room-state",payload=>{
 });
 
 socket.on("game-state",payload=>{
+  const previousSnapshot=onlineGameState;
   if(onlineRoomState){
     onlineRoomState.started=!payload.finished;
     onlineRoomState.players=payload.players;
@@ -1612,7 +1613,7 @@ socket.on("game-state",payload=>{
   }
   onlineGameState=payload;
   onlineWinnerShown=false;
-  applyOnlineGameState(payload);
+  applyOnlineGameState(payload,previousSnapshot);
 });
 
 // Read setup values, initialize game state, then show the board.
@@ -2203,11 +2204,34 @@ function getDisplayName(name){
   return name===AI_PLAYER_ID ? AI_DISPLAY_NAME : name;
 }
 
+function getOnlinePlayersSnapshot(){
+  return onlineGameState?.players || [];
+}
+
 function isBotPlayerAtIndex(index){
   if(isOnlineMode()){
-    return Boolean(onlineGameState?.players?.[index]?.isBot);
+    return Boolean(getOnlinePlayersSnapshot()?.[index]?.isBot);
   }
   return players[index]===AI_PLAYER_ID;
+}
+
+function isBotPlayerName(name){
+  if(name===AI_PLAYER_ID) return true;
+  return getOnlinePlayersSnapshot().some(player=>player.name===name && player.isBot);
+}
+
+function hasCommentatorBot(){
+  if(isOnlineMode()){
+    return getOnlinePlayersSnapshot().some(player=>player.isBot);
+  }
+  return AI;
+}
+
+function getCommentatorPlayerName(){
+  if(isOnlineMode()){
+    return getOnlinePlayersSnapshot().find(player=>player.isBot)?.name || AI_DISPLAY_NAME;
+  }
+  return COMMENTATOR_NAME;
 }
 
 // Refresh the scoreboard and highlight whose turn it is.
@@ -2235,7 +2259,7 @@ function updateScore(){
   }
 }
 
-function applyOnlineGameState(snapshot){
+function applyOnlineGameState(snapshot,previousSnapshot=null){
   if(!snapshot) return;
 
   if(modeSelect.value!==ONLINE_MODE){
@@ -2247,11 +2271,41 @@ function applyOnlineGameState(snapshot){
   size=+snapshot.size;
   gap=getBoardGapForSize(size);
   AI=false;
-  resetRoundFeedbackState();
+  gameFinished=false;
+  lastDrawnLine=null;
+  selected.forEach(dot=>dot.classList.remove("active"));
+  selected=[];
+  twoPlayerExactCache.clear();
+  aiThinkingToken++;
+  aiSearchDeadline=0;
 
   players=snapshot.players.map(player=>player.name);
   scores=snapshot.scores.slice();
   currentPlayer=snapshot.currentPlayer;
+
+  const previousLineKeys=new Set((previousSnapshot?.lines || []).map(line=>line.key));
+  const previousBoxKeys=new Set((previousSnapshot?.boxes || []).map(box=>box.key));
+  const newLineKey=snapshot.lastMove?.key && !previousLineKeys.has(snapshot.lastMove.key)
+    ? snapshot.lastMove.key
+    : "";
+  const newBoxKeys=new Set(
+    (snapshot.boxes || [])
+      .map(box=>box.key)
+      .filter(boxKey=>!previousBoxKeys.has(boxKey))
+  );
+  const scoreEvents=[];
+
+  if(previousSnapshot){
+    snapshot.scores.forEach((score,index)=>{
+      const previousScore=previousSnapshot.scores?.[index] || 0;
+      for(let nextScore=previousScore+1; nextScore<=score; nextScore++){
+        scoreEvents.push({
+          playerName:snapshot.players[index]?.name || players[index] || `P${index+1}`,
+          scoreCount:nextScore
+        });
+      }
+    });
+  }
 
   initBoard();
 
@@ -2259,11 +2313,14 @@ function applyOnlineGameState(snapshot){
     const moveMeta=moveByKey.get(line.key);
     if(!moveMeta) return;
 
+    const isLatestMove=line.key===snapshot.lastMove?.key;
+    const shouldAnimate=line.key===newLineKey;
+
     drawLine(moveMeta.a,moveMeta.b,{
       ownerIndex:line.ownerIndex,
-      animate:false,
-      highlightLastMove:snapshot.lastMove?.key===line.key,
-      silent:true
+      animate:shouldAnimate,
+      highlightLastMove:isLatestMove,
+      silent:!shouldAnimate
     });
   });
 
@@ -2272,9 +2329,16 @@ function applyOnlineGameState(snapshot){
 
     boxes.push(box.key);
     const [r,c]=box.key.split("-").map(Number);
-    drawBox(r,c,box.ownerIndex,false);
+    drawBox(r,c,box.ownerIndex,newBoxKeys.has(box.key));
     drawLabel(r,c,players[box.ownerIndex] || `P${box.ownerIndex+1}`);
   });
+
+  if(previousSnapshot){
+    scoreEvents.forEach(event=>{
+      playScore();
+      queueVoiceForScore(event.playerName,event.scoreCount);
+    });
+  }
 
   gameFinished=snapshot.finished;
   setup.style.display="none";
@@ -2701,7 +2765,7 @@ function stopGame(){
   let ranking = players
     .map((p,i)=>({name:p, score:scores[i]}))
     .sort((a,b)=>b.score-a.score);
-  const aiWon=ranking[0]?.name===AI_PLAYER_ID && (!ranking[1] || ranking[0].score>ranking[1].score);
+  const aiWon=isBotPlayerName(ranking[0]?.name) && (!ranking[1] || ranking[0].score>ranking[1].score);
 
   let popup = document.createElement("div");
   popup.id="winnerPopup";
@@ -2955,23 +3019,23 @@ function getVoiceEmoji(playerName,scoreCount){
 
 function queueVoiceForScore(playerName,scoreCount){
   if(!soundEnabled) return;
-  if(!AI) return;
+  if(!hasCommentatorBot()) return;
 
-  // The AI only comments on real player scores.
-  if(playerName===COMMENTATOR_NAME) return;
+  // Thankan only comments on real human scores.
+  if(isBotPlayerName(playerName)) return;
 
   // Control whether the custom clip should play for this score count.
   // With interval 2: scores 1,3,5... play. Scores 2,4,6... stay silent.
   if(((scoreCount-1) % VOICE_TRIGGER_INTERVAL)!==0) return;
 
-  const clipUrl=getNextVoiceClip(COMMENTATOR_NAME);
+  const clipUrl=getNextVoiceClip(AI_PLAYER_ID);
   if(!clipUrl) return;
 
   voiceQueue.push({
-    playerName:COMMENTATOR_NAME,
+    playerName:getCommentatorPlayerName(),
     scoreCount,
     clipUrl,
-    emoji:getVoiceEmoji(COMMENTATOR_NAME,scoreCount)
+    emoji:getVoiceEmoji(AI_PLAYER_ID,scoreCount)
   });
 
   if(!voicePlaying){
