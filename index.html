@@ -448,6 +448,7 @@ button,select,input{
   width:100%;
   height:100%;
 }
+
 .flash{
   position:absolute;
   inset:0;
@@ -691,6 +692,12 @@ button{background:var(--accent);}
   <label for="onlinePlayerName">Your Name</label>
   <input id="onlinePlayerName" type="text" value="Player 1">
 
+  <label for="onlineTotalPlayers">Total Players</label>
+  <select id="onlineTotalPlayers"></select>
+
+  <label for="onlineBotCount">Bots</label>
+  <select id="onlineBotCount"></select>
+
   <label for="roomCodeInput">Room Code</label>
   <input id="roomCodeInput" type="text" maxlength="6" placeholder="Create a room or enter a code">
 
@@ -781,6 +788,8 @@ const aiToggle=document.getElementById("aiToggle");
 const aiLevelSelect=document.getElementById("aiLevel");
 const onlinePanel=document.getElementById("onlinePanel");
 const onlinePlayerNameInput=document.getElementById("onlinePlayerName");
+const onlineTotalPlayersSelect=document.getElementById("onlineTotalPlayers");
+const onlineBotCountSelect=document.getElementById("onlineBotCount");
 const roomCodeInput=document.getElementById("roomCodeInput");
 const roomPasswordInput=document.getElementById("roomPasswordInput");
 const createRoomBtn=document.getElementById("createRoomBtn");
@@ -807,7 +816,7 @@ const localOnlyGroups=[...document.querySelectorAll("[data-local-only]")];
 
 const LOCAL_MODE="local";
 const ONLINE_MODE="online";
-const ONLINE_ROOM_CAPACITY=2;
+const ONLINE_DEFAULT_TOTAL_PLAYERS=2;
 const AI_PLAYER_ID="AI";
 const AI_DISPLAY_NAME="Thankan Chettan";
 const AI_WIN_SOUND="sounds/laugh.mp3";
@@ -1162,6 +1171,7 @@ for(let i=2;i<=6;i++) playerCount.innerHTML+=`<option>${i}</option>`;
 for(let i=3;i<=10;i++) gridSize.innerHTML+=`<option>${i}</option>`;
 playerCount.value="2";
 gridSize.value="4";
+populateOnlineSeatOptions();
 
 // Rebuild player name inputs whenever player count changes.
 playerCount.onchange=generateInputs;
@@ -1169,6 +1179,8 @@ aiToggle.addEventListener("change",syncAINameInput);
 modeSelect.addEventListener("change",handleModeChange);
 gridSize.addEventListener("change",handleSharedSettingChange);
 themeSelect.addEventListener("change",handleSharedSettingChange);
+onlineTotalPlayersSelect.addEventListener("change",handleOnlineTotalPlayersChange);
+onlineBotCountSelect.addEventListener("change",handleSharedSettingChange);
 createRoomBtn.addEventListener("click",createOnlineRoom);
 joinRoomBtn.addEventListener("click",joinOnlineRoom);
 copyRoomBtn.addEventListener("click",copyRoomCode);
@@ -1230,6 +1242,43 @@ function updateAIDifficultyStatus(){
   }
 }
 
+function populateOnlineSeatOptions(){
+  onlineTotalPlayersSelect.innerHTML="";
+  for(let i=2;i<=6;i++){
+    onlineTotalPlayersSelect.innerHTML+=`<option value="${i}">${i}</option>`;
+  }
+  onlineTotalPlayersSelect.value=String(ONLINE_DEFAULT_TOTAL_PLAYERS);
+  syncOnlineBotOptions();
+}
+
+function syncOnlineBotOptions(selectedValue){
+  const totalPlayers=Math.max(2,+onlineTotalPlayersSelect.value || ONLINE_DEFAULT_TOTAL_PLAYERS);
+  const nextValue=selectedValue ?? onlineBotCountSelect.value ?? "0";
+
+  onlineBotCountSelect.innerHTML="";
+  for(let i=0;i<totalPlayers;i++){
+    const label=i===0 ? "No Bots" : `${i}`;
+    onlineBotCountSelect.innerHTML+=`<option value="${i}">${label}</option>`;
+  }
+
+  const clampedValue=Math.min(Math.max(0,+nextValue || 0),totalPlayers-1);
+  onlineBotCountSelect.value=String(clampedValue);
+}
+
+function handleOnlineTotalPlayersChange(){
+  syncOnlineBotOptions();
+  handleSharedSettingChange();
+}
+
+function getOnlineRoomSettings(){
+  return {
+    size:+gridSize.value,
+    theme:themeSelect.value,
+    totalPlayers:+onlineTotalPlayersSelect.value || ONLINE_DEFAULT_TOTAL_PLAYERS,
+    botCount:+onlineBotCountSelect.value || 0
+  };
+}
+
 function isOnlineMode(){
   return gameMode===ONLINE_MODE;
 }
@@ -1283,14 +1332,23 @@ function clearOnlineRoomState(){
   roomPasswordInput.value="";
   gridSize.disabled=false;
   themeSelect.disabled=false;
+  onlineTotalPlayersSelect.disabled=false;
+  onlineBotCountSelect.disabled=false;
+  onlineTotalPlayersSelect.value=String(ONLINE_DEFAULT_TOTAL_PLAYERS);
+  syncOnlineBotOptions(0);
 }
 
 function updateOnlineLobbyUI(){
   const inRoom=Boolean(onlineRoomState);
   const isHost=inRoom && onlineRoomState.hostId===socket.id;
-  const playerCountInRoom=inRoom ? onlineRoomState.players.length : 0;
-  const roomReady=playerCountInRoom===ONLINE_ROOM_CAPACITY;
+  const totalPlayers=inRoom ? (+onlineRoomState.settings?.totalPlayers || ONLINE_DEFAULT_TOTAL_PLAYERS) : (+onlineTotalPlayersSelect.value || ONLINE_DEFAULT_TOTAL_PLAYERS);
+  const botCount=inRoom ? (+onlineRoomState.settings?.botCount || 0) : (+onlineBotCountSelect.value || 0);
+  const requiredHumans=Math.max(1,totalPlayers-botCount);
+  const humanCountInRoom=inRoom ? onlineRoomState.players.filter(player=>!player.isBot).length : 0;
+  const roomReady=humanCountInRoom>=requiredHumans;
+  const waitingHumans=Math.max(0,requiredHumans-humanCountInRoom);
   const currentTurnId=onlineGameState?.players?.[onlineGameState.currentPlayer]?.id || "";
+  const canEditSettings=!inRoom || (isHost && !onlineRoomState?.started);
 
   onlinePanel.style.display=isOnlineMode() ? "block" : "none";
   onlinePlayerNameInput.disabled=inRoom;
@@ -1305,12 +1363,16 @@ function updateOnlineLobbyUI(){
   onlineRoomMeta.style.display=inRoom ? "grid" : "none";
   roomCodeLabel.textContent=inRoom ? onlineRoomState.roomCode : "----";
   onlineRoleLabel.textContent=inRoom ? (isHost ? "Host" : "Guest") : "Not in a room";
-  gridSize.disabled=inRoom && !isHost;
-  themeSelect.disabled=inRoom && !isHost;
+  gridSize.disabled=!canEditSettings;
+  themeSelect.disabled=!canEditSettings;
+  onlineTotalPlayersSelect.disabled=!canEditSettings;
+  onlineBotCountSelect.disabled=!canEditSettings;
 
   if(inRoom && onlineRoomState.settings){
     gridSize.value=String(onlineRoomState.settings.size);
     themeSelect.value=onlineRoomState.settings.theme || "";
+    onlineTotalPlayersSelect.value=String(totalPlayers);
+    syncOnlineBotOptions(botCount);
   }
 
   if(!inRoom){
@@ -1320,8 +1382,9 @@ function updateOnlineLobbyUI(){
 
   const playerMarkup=onlineRoomState.players.map((player,index)=>{
     const badges=[];
+    if(player.isBot) badges.push("Bot");
     if(player.id===socket.id) badges.push("You");
-    if(player.id===onlineRoomState.hostId) badges.push("Host");
+    if(!player.isBot && player.id===onlineRoomState.hostId) badges.push("Host");
     if(onlineRoomState.started && player.id===currentTurnId) badges.push("Turn");
 
     return `
@@ -1332,11 +1395,11 @@ function updateOnlineLobbyUI(){
     `;
   });
 
-  if(playerCountInRoom<ONLINE_ROOM_CAPACITY){
+  if(waitingHumans>0){
     playerMarkup.push(`
       <div class="online-player-chip waiting">
         <span>Waiting for friend...</span>
-        <span class="host-badge">${ONLINE_ROOM_CAPACITY-playerCountInRoom} seat left</span>
+        <span class="host-badge">${waitingHumans} human seat${waitingHumans===1 ? "" : "s"} left</span>
       </div>
     `);
   }
@@ -1348,11 +1411,11 @@ function updateOnlineLobbyUI(){
   }else if(onlineRoomState.started){
     setOnlineStatus("Match is live.");
   }else if(!roomReady){
-    setOnlineStatus(`Room ${onlineRoomState.roomCode} ready. Waiting for ${ONLINE_ROOM_CAPACITY-playerCountInRoom} more player.`);
+    setOnlineStatus(`Room ${onlineRoomState.roomCode} ready. Waiting for ${waitingHumans} more human player${waitingHumans===1 ? "" : "s"}.`);
   }else if(isHost){
-    setOnlineStatus("Both players are ready. Press Start Match.");
+    setOnlineStatus("Room is ready. Press Start Match.");
   }else{
-    setOnlineStatus("Both players are ready. Waiting for the host to start.");
+    setOnlineStatus("Room is ready. Waiting for the host to start.");
   }
 }
 
@@ -1397,8 +1460,7 @@ function handleSharedSettingChange(){
   if(onlineRoomState.started) return;
 
   socket.emit("update-room-settings",{
-    size:+gridSize.value,
-    theme:themeSelect.value
+    ...getOnlineRoomSettings()
   });
 }
 
@@ -1417,10 +1479,7 @@ function createOnlineRoom(){
   socket.emit("create-room",{
     playerName:getOnlinePlayerName(),
     password,
-    settings:{
-      size:+gridSize.value,
-      theme:themeSelect.value
-    }
+    settings:getOnlineRoomSettings()
   },response=>{
     if(!response?.ok){
       setOnlineStatus(response?.error || "Could not create the room.",true);
@@ -1546,7 +1605,9 @@ socket.on("game-state",payload=>{
     onlineRoomState.players=payload.players;
     onlineRoomState.settings={
       size:payload.size,
-      theme:payload.theme
+      theme:payload.theme,
+      totalPlayers:payload.players.length,
+      botCount:payload.players.filter(player=>player.isBot).length
     };
   }
   onlineGameState=payload;
@@ -2051,7 +2112,7 @@ function drawLine(a,b,options={}){
   }
 
   // Give AI moves a stronger glow so they are easy to identify.
-  if(highlightLastMove && players[ownerIndex]==="AI"){
+  if(highlightLastMove && isBotPlayerAtIndex(ownerIndex)){
     l.classList.add("ai-move");
   }
 
@@ -2142,13 +2203,20 @@ function getDisplayName(name){
   return name===AI_PLAYER_ID ? AI_DISPLAY_NAME : name;
 }
 
+function isBotPlayerAtIndex(index){
+  if(isOnlineMode()){
+    return Boolean(onlineGameState?.players?.[index]?.isBot);
+  }
+  return players[index]===AI_PLAYER_ID;
+}
+
 // Refresh the scoreboard and highlight whose turn it is.
 function updateScore(){
   scoreboard.innerHTML="<h3>Score</h3>";
 
   players.forEach((p,i)=>{
     const safePlayer=escapeHtml(getDisplayName(p));
-    const isAIPlayer=p===AI_PLAYER_ID;
+    const isAIPlayer=isBotPlayerAtIndex(i);
     scoreboard.innerHTML+=`
       <div class="score-row ${i===currentPlayer?"active-player":""}" id="scoreRow-${i}">
         <div class="score-meta">
