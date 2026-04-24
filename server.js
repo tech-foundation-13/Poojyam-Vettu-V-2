@@ -15,8 +15,10 @@ const io = new Server(server, {
 
 const rooms = new Map();
 const ROOM_CODE_LENGTH = 6;
-const MAX_PLAYERS_PER_ROOM = 2;
+const MIN_TOTAL_PLAYERS = 2;
+const MAX_TOTAL_PLAYERS = 6;
 const THEMES = new Set(["", "light", "neon"]);
+const BOT_THINK_TIME_MS = 650;
 
 app.use(express.static(__dirname));
 
@@ -62,7 +64,14 @@ function hashPassword(password) {
 function normalizeSettings(settings = {}) {
   const size = clamp(Number(settings.size) || 4, 3, 10);
   const theme = THEMES.has(settings.theme) ? settings.theme : "";
-  return { size, theme };
+  const totalPlayers = clamp(Number(settings.totalPlayers) || 2, MIN_TOTAL_PLAYERS, MAX_TOTAL_PLAYERS);
+  const botCount = clamp(Number(settings.botCount) || 0, 0, totalPlayers - 1);
+
+  return { size, theme, totalPlayers, botCount };
+}
+
+function getRequiredHumanCount(settings) {
+  return Math.max(1, settings.totalPlayers - settings.botCount);
 }
 
 function createRoomCode() {
@@ -77,6 +86,35 @@ function createRoomCode() {
   } while (rooms.has(code));
 
   return code;
+}
+
+function createBotPlayer(roomCode, number) {
+  return {
+    id: `BOT-${roomCode}-${number}`,
+    name: `Bot ${number}`,
+    isBot: true
+  };
+}
+
+function isBotPlayer(player) {
+  return Boolean(player?.isBot);
+}
+
+function getHumanPlayers(room) {
+  return room.players.filter(player => !isBotPlayer(player));
+}
+
+function getBotPlayers(room) {
+  return room.players.filter(isBotPlayer);
+}
+
+function syncRoomBots(room) {
+  const humans = getHumanPlayers(room);
+  const maxBotsAllowed = Math.max(0, room.settings.totalPlayers - humans.length);
+  room.settings.botCount = Math.min(room.settings.botCount, maxBotsAllowed);
+  room.players = humans.concat(
+    Array.from({ length: room.settings.botCount }, (_unused, index) => createBotPlayer(room.code, index + 1))
+  );
 }
 
 function boxKey(row, col) {
@@ -168,7 +206,8 @@ function serializeRoom(room, notice = "") {
     players: room.players.map((player, index) => ({
       id: player.id,
       name: player.name,
-      index
+      index,
+      isBot: Boolean(player.isBot)
     })),
     settings: { ...room.settings },
     notice
@@ -185,7 +224,8 @@ function serializeGameState(room) {
     players: room.players.map((player, index) => ({
       id: player.id,
       name: player.name,
-      index
+      index,
+      isBot: Boolean(player.isBot)
     })),
     scores: room.gameState.scores.slice(),
     currentPlayer: room.gameState.currentPlayer,
@@ -293,12 +333,165 @@ function applyMove(room, playerId, rawMoveKey) {
   return { ok: true };
 }
 
+function listAllMoves(size) {
+  const moves = [];
+
+  for (let row = 0; row < size; row++) {
+    for (let col = 0; col < size - 1; col++) {
+      moves.push(edgeKeyFromCoords(row, col, row, col + 1));
+    }
+  }
+
+  for (let row = 0; row < size - 1; row++) {
+    for (let col = 0; col < size; col++) {
+      moves.push(edgeKeyFromCoords(row, col, row + 1, col));
+    }
+  }
+
+  return moves;
+}
+
+function countBoxSides(size, lineSet, row, col) {
+  return boxEdges(row, col).reduce((count, edge) => count + (lineSet.has(edge) ? 1 : 0), 0);
+}
+
+function inspectMove(size, lineSet, moveKey) {
+  let completedBoxes = 0;
+  let createdThirdEdges = 0;
+  let createdSecondEdges = 0;
+
+  for (const adjacent of getAdjacentBoxes(size, moveKey)) {
+    const sides = countBoxSides(size, lineSet, adjacent.row, adjacent.col) + 1;
+    if (sides === 4) completedBoxes++;
+    else if (sides === 3) createdThirdEdges++;
+    else if (sides === 2) createdSecondEdges++;
+  }
+
+  return {
+    completedBoxes,
+    createdThirdEdges,
+    createdSecondEdges,
+    isBoundary: getAdjacentBoxes(size, moveKey).length === 1
+  };
+}
+
+function chooseBotMove(room) {
+  if (!room.gameState) return "";
+
+  const size = room.gameState.size;
+  const lineSet = new Set(room.gameState.lines.map(line => line.key));
+  const entries = listAllMoves(size)
+    .filter(moveKey => !lineSet.has(moveKey))
+    .map(moveKey => ({
+      moveKey,
+      stats: inspectMove(size, lineSet, moveKey)
+    }));
+
+  if (!entries.length) return "";
+
+  const scoredMoves = entries.filter(entry => entry.stats.completedBoxes > 0);
+  const safeMoves = entries.filter(entry => entry.stats.completedBoxes === 0 && entry.stats.createdThirdEdges === 0);
+  const riskyMoves = entries.filter(entry => entry.stats.createdThirdEdges > 0);
+
+  const orderByRisk = source => {
+    return source.sort((left, right) => {
+      if (right.stats.completedBoxes !== left.stats.completedBoxes) {
+        return right.stats.completedBoxes - left.stats.completedBoxes;
+      }
+      if (left.stats.createdThirdEdges !== right.stats.createdThirdEdges) {
+        return left.stats.createdThirdEdges - right.stats.createdThirdEdges;
+      }
+      if (left.stats.createdSecondEdges !== right.stats.createdSecondEdges) {
+        return left.stats.createdSecondEdges - right.stats.createdSecondEdges;
+      }
+      if (left.stats.isBoundary !== right.stats.isBoundary) {
+        return left.stats.isBoundary ? -1 : 1;
+      }
+      return 0;
+    });
+  };
+
+  if (scoredMoves.length) {
+    return orderByRisk(scoredMoves)[0].moveKey;
+  }
+
+  if (safeMoves.length) {
+    return orderByRisk(safeMoves)[0].moveKey;
+  }
+
+  return orderByRisk(riskyMoves)[0].moveKey;
+}
+
+function clearBotTurnTimer(room) {
+  if (room.botTurnTimer) {
+    clearTimeout(room.botTurnTimer);
+    room.botTurnTimer = null;
+  }
+}
+
+function runBotTurn(room) {
+  clearBotTurnTimer(room);
+
+  if (!room.started || !room.gameState || room.gameState.finished) {
+    return;
+  }
+
+  const currentPlayer = room.players[room.gameState.currentPlayer];
+  if (!isBotPlayer(currentPlayer)) {
+    return;
+  }
+
+  const moveKey = chooseBotMove(room);
+  if (!moveKey) {
+    room.gameState.finished = true;
+    room.started = false;
+    broadcastGameState(room);
+    broadcastRoomState(room, "Match finished. Host can start a rematch.");
+    return;
+  }
+
+  const result = applyMove(room, currentPlayer.id, moveKey);
+  if (!result.ok) {
+    console.error("Bot move failed:", result.error);
+    return;
+  }
+
+  broadcastGameState(room);
+
+  if (room.gameState?.finished) {
+    broadcastRoomState(room, "Match finished. Host can start a rematch.");
+    return;
+  }
+
+  scheduleBotTurn(room);
+}
+
+function scheduleBotTurn(room) {
+  clearBotTurnTimer(room);
+
+  if (!room.started || !room.gameState || room.gameState.finished) {
+    return;
+  }
+
+  const currentPlayer = room.players[room.gameState.currentPlayer];
+  if (!isBotPlayer(currentPlayer)) {
+    return;
+  }
+
+  room.botTurnTimer = setTimeout(() => {
+    room.botTurnTimer = null;
+    runBotTurn(room);
+  }, BOT_THINK_TIME_MS);
+}
+
 function leaveRoom(socket, reason = "left the room") {
   const room = getRoomForSocket(socket);
   if (!room) {
     socket.data.roomCode = null;
     return;
   }
+
+  clearBotTurnTimer(room);
 
   socket.leave(room.code);
   socket.data.roomCode = null;
@@ -308,13 +501,14 @@ function leaveRoom(socket, reason = "left the room") {
     room.players.splice(index, 1);
   }
 
-  if (!room.players.length) {
+  const remainingHumans = getHumanPlayers(room);
+  if (!remainingHumans.length) {
     rooms.delete(room.code);
     return;
   }
 
   if (room.hostId === socket.id) {
-    room.hostId = room.players[0].id;
+    room.hostId = remainingHumans[0].id;
   }
 
   if (room.started) {
@@ -324,6 +518,7 @@ function leaveRoom(socket, reason = "left the room") {
     return;
   }
 
+  syncRoomBots(room);
   broadcastRoomState(room, `A player ${reason}.`);
 }
 
@@ -346,17 +541,26 @@ io.on("connection", socket => {
       passwordHash: hashPassword(password),
       players: [{
         id: socket.id,
-        name: normalizePlayerName(payload.playerName)
+        name: normalizePlayerName(payload.playerName),
+        isBot: false
       }],
       settings: normalizeSettings(payload.settings),
       started: false,
-      gameState: null
+      gameState: null,
+      botTurnTimer: null
     };
 
+    syncRoomBots(room);
     rooms.set(code, room);
     socket.join(code);
     socket.data.roomCode = code;
-    broadcastRoomState(room, "Room created. Share the room code and password with your friend.");
+    
+    const humanSeats = getRequiredHumanCount(room.settings);
+    const humanNotice = humanSeats > 1
+      ? `Share the room code and password with ${humanSeats - 1} friend${humanSeats - 1 === 1 ? "" : "s"}.`
+      : "This room can start with just you because the rest are bots.";
+
+    broadcastRoomState(room, `Room created. ${humanNotice}`);
     ack({ ok: true, roomCode: code });
   });
 
@@ -373,8 +577,9 @@ io.on("connection", socket => {
       return;
     }
 
-    if (room.players.length >= MAX_PLAYERS_PER_ROOM) {
-      ack({ ok: false, error: "That room is already full." });
+    const humanPlayers = getHumanPlayers(room);
+    if (humanPlayers.length >= getRequiredHumanCount(room.settings)) {
+      ack({ ok: false, error: "All human seats in that room are already filled." });
       return;
     }
 
@@ -385,25 +590,53 @@ io.on("connection", socket => {
 
     leaveRoom(socket);
 
-    room.players.push({
+    const existingHumans = getHumanPlayers(room);
+    room.players = existingHumans.concat(getBotPlayers(room));
+    room.players.splice(existingHumans.length, 0, {
       id: socket.id,
-      name: normalizePlayerName(payload.playerName)
+      name: normalizePlayerName(payload.playerName),
+      isBot: false
     });
 
+    syncRoomBots(room);
     socket.join(room.code);
     socket.data.roomCode = room.code;
     broadcastRoomState(room, "Friend joined the room.");
     ack({ ok: true, roomCode: room.code });
   });
 
-  socket.on("update-room-settings", payload => {
+  socket.on("update-room-settings", (payload = {}, ack = () => {}) => {
     const room = getRoomForSocket(socket);
-    if (!room) return;
-    if (room.hostId !== socket.id) return;
-    if (room.started) return;
+    if (!room) {
+      ack({ ok: false, error: "Join a room first." });
+      return;
+    }
 
-    room.settings = normalizeSettings(payload);
+    if (room.hostId !== socket.id) {
+      ack({ ok: false, error: "Only the host can change room settings." });
+      return;
+    }
+
+    if (room.started) {
+      ack({ ok: false, error: "You cannot change settings during a live match." });
+      return;
+    }
+
+    const requested = normalizeSettings(payload);
+    const humanPlayers = getHumanPlayers(room);
+    const totalPlayers = Math.max(requested.totalPlayers, humanPlayers.length);
+    const botCount = Math.min(requested.botCount, totalPlayers - humanPlayers.length);
+
+    room.settings = {
+      size: requested.size,
+      theme: requested.theme,
+      totalPlayers,
+      botCount
+    };
+
+    syncRoomBots(room);
     broadcastRoomState(room, "Room settings updated.");
+    ack({ ok: true });
   });
 
   socket.on("start-online-game", (ack = () => {}) => {
@@ -418,15 +651,22 @@ io.on("connection", socket => {
       return;
     }
 
-    if (room.players.length !== MAX_PLAYERS_PER_ROOM) {
-      ack({ ok: false, error: "You need 2 players before starting." });
+    const humanPlayers = getHumanPlayers(room);
+    const requiredHumans = getRequiredHumanCount(room.settings);
+    if (humanPlayers.length < requiredHumans) {
+      ack({
+        ok: false,
+        error: `You need ${requiredHumans} human player${requiredHumans === 1 ? "" : "s"} before starting.`
+      });
       return;
     }
 
+    syncRoomBots(room);
     room.started = true;
     room.gameState = createInitialGameState(room);
     broadcastRoomState(room, "Match started.");
     broadcastGameState(room);
+    scheduleBotTurn(room);
     ack({ ok: true });
   });
 
@@ -448,6 +688,8 @@ io.on("connection", socket => {
 
     if (room.gameState?.finished) {
       broadcastRoomState(room, "Match finished. Host can start a rematch.");
+      } else {
+      scheduleBotTurn(room);
     }
 
     ack({ ok: true });
