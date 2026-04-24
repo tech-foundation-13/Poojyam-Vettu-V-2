@@ -19,6 +19,7 @@ const MIN_TOTAL_PLAYERS = 2;
 const MAX_TOTAL_PLAYERS = 6;
 const THEMES = new Set(["", "light", "neon"]);
 const BOT_THINK_TIME_MS = 650;
+const BOT_BASE_NAME = "Thankan";
 
 app.use(express.static(__dirname));
 
@@ -91,7 +92,7 @@ function createRoomCode() {
 function createBotPlayer(roomCode, number) {
   return {
     id: `BOT-${roomCode}-${number}`,
-    name: `Bot ${number}`,
+    name: number === 1 ? BOT_BASE_NAME : `${BOT_BASE_NAME} ${number}`,
     isBot: true
   };
 }
