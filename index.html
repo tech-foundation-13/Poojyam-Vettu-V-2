@@ -1426,7 +1426,9 @@ function syncModeUI(){
   });
   startLocalBtn.style.display=online ? "none" : "";
   restartBtn.style.display=online ? "none" : "";
-  stopBtn.style.display=online ? "none" : "";
+  stopBtn.style.display="";
+  stopBtn.textContent=online ? "Leave Room" : "Stop";
+  stopBtn.onclick=online ? leaveOnlineRoom : stopGame;
 
   if(online){
     playerCount.value="2";
