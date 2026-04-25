@@ -874,6 +874,7 @@ let gameMode=LOCAL_MODE;
 let onlineRoomState=null;
 let onlineGameState=null;
 let onlineWinnerShown=false;
+let pendingOnlineMoveDirection=null;
 
 
 // Custom score voice configuration.
@@ -1361,6 +1362,7 @@ function getBoardGapForSize(boardSize){
 function resetRoundFeedbackState(){
   gameFinished=false;
   lastDrawnLine=null;
+  pendingOnlineMoveDirection=null;
   selected.forEach(dot=>dot.classList.remove("active"));
   selected=[];
   voiceQueue=[];
@@ -1775,10 +1777,19 @@ function handleClick(dot){
 
     if(valid(a,b)&&!exists(a,b)){
       if(isOnlineMode()){
+        const moveKey=edgeKey(a,b);
+        pendingOnlineMoveDirection={
+          key:moveKey,
+          from:getDotPosition(a),
+          to:getDotPosition(b)
+        };
         socket.emit("play-move",{
-          moveKey:edgeKey(a,b)
+          moveKey
         },response=>{
           if(!response || !response.ok){
+            if(pendingOnlineMoveDirection && pendingOnlineMoveDirection.key===moveKey){
+              pendingOnlineMoveDirection=null;
+            }
             setOnlineStatus((response && response.error) || "That move was rejected.",true);
           }
         });
@@ -1833,6 +1844,13 @@ function edgeKeyFromCoords(r1,c1,r2,c2){
 
 function edgeKey(a,b){
   return edgeKeyFromCoords(+a.dataset.r,+a.dataset.c,+b.dataset.r,+b.dataset.c);
+}
+
+function getDotPosition(dot){
+  return {
+    r:+dot.dataset.r,
+    c:+dot.dataset.c
+  };
 }
 
 // Build a Set of all current lines, with an optional extra trial move.
@@ -2407,7 +2425,11 @@ function applyOnlineGameState(snapshot,previousSnapshot=null){
 
     const isLatestMove=line.key===lastMoveKey;
     const shouldAnimate=line.key===newLineKey;
-    drawLine(moveMeta.a,moveMeta.b,{
+    const usePendingDirection=shouldAnimate && pendingOnlineMoveDirection && pendingOnlineMoveDirection.key===line.key;
+    const startDot=usePendingDirection ? (dotAt(pendingOnlineMoveDirection.from.r,pendingOnlineMoveDirection.from.c) || moveMeta.a) : moveMeta.a;
+    const endDot=usePendingDirection ? (dotAt(pendingOnlineMoveDirection.to.r,pendingOnlineMoveDirection.to.c) || moveMeta.b) : moveMeta.b;
+
+    drawLine(startDot,endDot,{
       ownerIndex:line.ownerIndex,
       animate:shouldAnimate,
       highlightLastMove:isLatestMove,
@@ -2415,6 +2437,10 @@ function applyOnlineGameState(snapshot,previousSnapshot=null){
     });
   });
 
+  if(pendingOnlineMoveDirection && snapshot.lines.some(line=>line.key===pendingOnlineMoveDirection.key)){
+    pendingOnlineMoveDirection=null;
+  }
+  
   snapshot.boxes.forEach(box=>{
     if(boxes.includes(box.key)) return;
 
@@ -3222,7 +3248,7 @@ function animateParticles(){
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
   for(let p of particles){
-    p.x += p.dx;
+    p.x += p.dx;  
     p.y += p.dy;
 
     if(p.x < 0 || p.x > canvas.width) p.dx *= -1;
