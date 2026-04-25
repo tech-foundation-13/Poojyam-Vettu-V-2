@@ -1002,6 +1002,7 @@ let aiSearchDeadline=0;
 
 // Dot size is reused for board spacing math.
 const DOT=22;
+const BOARD_PADDING=14;
 const MOBILE_MIN_GAP=34;
 const DESKTOP_MIN_GAP=28;
 const MAX_GAP=56;
@@ -1714,7 +1715,7 @@ function initBoard(){
   moveByKey=new Map();
   boxLibrary=[];
 
-  let boardSize=(size-1)*gap+DOT;
+  let boardSize=(size-1)*gap+DOT+BOARD_PADDING*2;
   board.style.width=boardSize+"px";
   board.style.height=boardSize+"px";
   const boardFrame=document.getElementById("boardFrame");
@@ -1727,8 +1728,8 @@ function initBoard(){
     for(let c=0;c<size;c++){
       let d=document.createElement("div");
       d.className="dot";
-      d.style.left=(c*gap+DOT/2)+"px";
-      d.style.top=(r*gap+DOT/2)+"px";
+      d.style.left=(BOARD_PADDING+c*gap+DOT/2)+"px";
+      d.style.top=(BOARD_PADDING+r*gap+DOT/2)+"px";
       d.dataset.r=r; d.dataset.c=c;
       d.onclick=()=>handleClick(d);
       board.appendChild(d);
@@ -2243,8 +2244,8 @@ function drawBox(r,c,ownerIndex=currentPlayer,animate=true){
   let b=document.createElement("div");
   b.className="box";
 
-  b.style.left=(c*gap+DOT/2)+"px";
-  b.style.top=(r*gap+DOT/2)+"px";
+  b.style.left=(BOARD_PADDING+c*gap+DOT/2)+"px";
+  b.style.top=(BOARD_PADDING+r*gap+DOT/2)+"px";
   b.style.width=gap+"px";
   b.style.height=gap+"px";
   b.style.background=colors[ownerIndex % colors.length];
@@ -2262,8 +2263,8 @@ function drawLabel(r,c,name){
   let l=document.createElement("div");
   l.className="box-label";
 
-  l.style.left=(c*gap+DOT/2)+"px";
-  l.style.top=(r*gap+DOT/2)+"px";
+  l.style.left=(BOARD_PADDING+c*gap+DOT/2)+"px";
+  l.style.top=(BOARD_PADDING+r*gap+DOT/2)+"px";
   l.style.width=gap+"px";
   l.style.height=gap+"px";
 
