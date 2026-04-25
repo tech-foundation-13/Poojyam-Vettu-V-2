@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark light">
 <title>POOJYAM-VETT</title>
 
 <style>
@@ -16,28 +17,30 @@
 }
 
 *{ box-sizing:border-box; }
-html {
-  background: #1e1e2f;
+
+html{
+  min-height:100%;
+  background:#1e1e2f;
+  color-scheme:dark;
 }
-  
+
 body{
   font-family:'Segoe UI',sans-serif;
-
-  background:#1e1e2f; /* 🔥 fallback (VERY IMPORTANT) */
+  min-height:100vh;
+  min-height:100dvh;
+  background:#1e1e2f;
+  background:linear-gradient(135deg,#1e1e2f,#2c2c54);
   background:linear-gradient(135deg,var(--bg),#2c2c54);
-
+  color:white;
   color:var(--text);
   text-align:center;
   margin:0;
+  -webkit-text-size-adjust:100%;
 }
 
-html, body {
-  height: 100%;
-}
-  
 /* THEMES: swap CSS variables by adding a class to <body> */
-body.light{ --bg:#f5f5f5; --board:#fff; --text:#111; --panel:#ffffff; --panel-soft:rgba(0,0,0,0.05); }
-body.neon{ --bg:#000; --board:#020202; --text:#39ff14; --accent:#39ff14; --panel:#050505; --panel-soft:rgba(57,255,20,0.08); }
+body.light{ background:#f5f5f5; color:#111; --bg:#f5f5f5; --board:#fff; --text:#111; --panel:#ffffff; --panel-soft:rgba(0,0,0,0.05); }
+body.neon{ background:#000; color:#39ff14; --bg:#000; --board:#020202; --text:#39ff14; --accent:#39ff14; --panel:#050505; --panel-soft:rgba(57,255,20,0.08); }
 
 /* SETUP SCREEN */
 #setup{
@@ -45,10 +48,13 @@ body.neon{ --bg:#000; --board:#020202; --text:#39ff14; --accent:#39ff14; --panel
   margin:40px auto;
   padding:30px;
   border-radius:20px;
+  background:#0f0f1a;
+  background:linear-gradient(145deg,#0f0f1a,#1a1a2e);
   background:linear-gradient(145deg,var(--panel),#1a1a2e);
   box-shadow:
     0 0 25px rgba(0,212,255,0.4),
     inset 0 0 15px rgba(255,255,255,0.05);
+  -webkit-backdrop-filter:blur(10px);
   backdrop-filter:blur(10px);
   animation:fadeIn 0.5s ease;
 }
@@ -64,6 +70,7 @@ body.neon{ --bg:#000; --board:#020202; --text:#39ff14; --accent:#39ff14; --panel
   margin:15px 0;
   padding:12px;
   border-radius:12px;
+  background:rgba(255,255,255,0.05);
   background:var(--panel-soft);
   text-align:left;
 }
@@ -251,6 +258,7 @@ body.light #setup input[type="text"]{
 
 #board{
   position:relative;
+  background:#111;
   background:var(--board);
   border-radius:15px;
   margin:20px auto;
@@ -561,6 +569,12 @@ button,select,input{
   pointer-events:none; /* IMPORTANT so it won't block clicks */
 }
 
+@supports not ((backdrop-filter:blur(10px)) or (-webkit-backdrop-filter:blur(10px))){
+  #setup{
+    background:rgba(15,15,26,0.97);
+  }
+}
+
 body > *{
   position:relative;
   z-index:1;
@@ -647,7 +661,7 @@ body > *{
   }
 }
 
-button{background:var(--accent);}
+button{background:#00d4ff;background:var(--accent);}
 </style>
 </head>
 
@@ -783,7 +797,26 @@ button{background:var(--accent);}
 
 <script>
 
-const socket = io();
+const ONLINE_SERVER_REQUIRED_MESSAGE="Online mode needs the Node.js server. Run server.js locally or deploy this project as a Render Web Service.";
+
+function createSocketStub(){
+  return {
+    connected:false,
+    id:"",
+    on(){},
+    emit(_event,...args){
+      const ack=args.find(arg=>typeof arg==="function");
+            if(ack){
+        ack({ok:false,error:ONLINE_SERVER_REQUIRED_MESSAGE});
+      }
+    }
+  };
+}
+
+const HAS_SOCKET_IO=typeof window.io==="function";
+const socket=HAS_SOCKET_IO ? window.io() : createSocketStub();
+const BIGINT_AVAILABLE=typeof window.BigInt==="function";
+const BIGINT_ZERO=BIGINT_AVAILABLE ? window.BigInt(0) : 0;
 
 // Player colors used for lines, boxes, and labels.
 const colors=["#ff4d4d","#4dff88","#4da6ff","#ffd24d","#ff66cc","#66ffff"];
@@ -823,6 +856,13 @@ const soundBtn=document.getElementById("soundBtn");
 const restartBtn=document.getElementById("restartBtn");
 const stopBtn=document.getElementById("stopBtn");
 const localOnlyGroups=[...document.querySelectorAll("[data-local-only]")];
+
+function getBigIntBitValue(index){
+  if(!BIGINT_AVAILABLE){
+    return null;
+  }
+  return window.BigInt(1) << window.BigInt(index);
+}
 
 const LOCAL_MODE="local";
 const ONLINE_MODE="online";
@@ -1170,7 +1210,7 @@ function toggleSound(){
     lastVoiceClipByPlayer={};
     Object.values(scoreAnnouncementTimers).forEach(timer=>clearTimeout(timer));
     scoreAnnouncementTimers={};
-    document.querySelectorAll(".speaker-badge").forEach(badge=>{
+        document.querySelectorAll(".speaker-badge").forEach(badge=>{
       badge.classList.remove("show");
       badge.textContent="";
     });
@@ -1263,7 +1303,9 @@ function populateOnlineSeatOptions(){
 
 function syncOnlineBotOptions(selectedValue){
   const totalPlayers=Math.max(2,+onlineTotalPlayersSelect.value || ONLINE_DEFAULT_TOTAL_PLAYERS);
-  const nextValue=selectedValue ?? onlineBotCountSelect.value ?? "0";
+  const nextValue=selectedValue!==undefined && selectedValue!==null
+    ? selectedValue
+    : (onlineBotCountSelect.value || "0");
 
   onlineBotCountSelect.innerHTML="";
   for(let i=0;i<totalPlayers;i++){
@@ -1351,14 +1393,17 @@ function clearOnlineRoomState(){
 function updateOnlineLobbyUI(){
   const inRoom=Boolean(onlineRoomState);
   const isHost=inRoom && onlineRoomState.hostId===socket.id;
-  const totalPlayers=inRoom ? (+onlineRoomState.settings?.totalPlayers || ONLINE_DEFAULT_TOTAL_PLAYERS) : (+onlineTotalPlayersSelect.value || ONLINE_DEFAULT_TOTAL_PLAYERS);
-  const botCount=inRoom ? (+onlineRoomState.settings?.botCount || 0) : (+onlineBotCountSelect.value || 0);
+  const roomSettings=inRoom && onlineRoomState.settings ? onlineRoomState.settings : null;
+  const totalPlayers=inRoom ? (+roomSettings.totalPlayers || ONLINE_DEFAULT_TOTAL_PLAYERS) : (+onlineTotalPlayersSelect.value || ONLINE_DEFAULT_TOTAL_PLAYERS);
+  const botCount=inRoom ? (+roomSettings.botCount || 0) : (+onlineBotCountSelect.value || 0);
   const requiredHumans=Math.max(1,totalPlayers-botCount);
   const humanCountInRoom=inRoom ? onlineRoomState.players.filter(player=>!player.isBot).length : 0;
   const roomReady=humanCountInRoom>=requiredHumans;
   const waitingHumans=Math.max(0,requiredHumans-humanCountInRoom);
-  const currentTurnId=onlineGameState?.players?.[onlineGameState.currentPlayer]?.id || "";
-  const canEditSettings=!inRoom || (isHost && !onlineRoomState?.started);
+  const onlinePlayers=onlineGameState && onlineGameState.players ? onlineGameState.players : [];
+  const currentTurnPlayer=onlinePlayers[onlineGameState ? onlineGameState.currentPlayer : -1];
+  const currentTurnId=currentTurnPlayer ? currentTurnPlayer.id : "";
+  const canEditSettings=!inRoom || (isHost && !onlineRoomState.started);
 
   onlinePanel.style.display=isOnlineMode() ? "block" : "none";
   onlinePlayerNameInput.disabled=inRoom;
@@ -1369,7 +1414,7 @@ function updateOnlineLobbyUI(){
   copyRoomBtn.style.display=isOnlineMode() && inRoom ? "" : "none";
   leaveRoomBtn.style.display=isOnlineMode() && inRoom ? "" : "none";
   startOnlineBtn.style.display=isOnlineMode() && inRoom && isHost ? "" : "none";
-  startOnlineBtn.disabled=!(isHost && roomReady && !onlineRoomState?.started);
+  startOnlineBtn.disabled=!(isHost && roomReady && !(onlineRoomState && onlineRoomState.started));
   onlineRoomMeta.style.display=inRoom ? "grid" : "none";
   roomCodeLabel.textContent=inRoom ? onlineRoomState.roomCode : "----";
   onlineRoleLabel.textContent=inRoom ? (isHost ? "Host" : "Guest") : "Not in a room";
@@ -1409,7 +1454,7 @@ function updateOnlineLobbyUI(){
     playerMarkup.push(`
       <div class="online-player-chip waiting">
         <span>Waiting for friend...</span>
-        <span class="host-badge">${waitingHumans} seat${waitingHumans===1 ? "" : "s"} left</span>
+        <span class="host-badge">${waitingHumans} human seat${waitingHumans===1 ? "" : "s"} left</span>
       </div>
     `);
   }
@@ -1449,7 +1494,9 @@ function syncModeUI(){
   syncAINameInput();
   updateOnlineLobbyUI();
 
-  if(online && !onlineRoomState){
+  if(online && !HAS_SOCKET_IO){
+    setOnlineStatus(ONLINE_SERVER_REQUIRED_MESSAGE,true);
+  }else if(online && !onlineRoomState){
     setOnlineStatus("Create a private room, share the code and password, then start when both players are ready.");
   }
 }
@@ -1493,8 +1540,8 @@ function createOnlineRoom(){
     password,
     settings:getOnlineRoomSettings()
   },response=>{
-    if(!response?.ok){
-      setOnlineStatus(response?.error || "Could not create the room.",true);
+    if(!response || !response.ok){
+      setOnlineStatus((response && response.error) || "Could not create the room.",true);
       return;
     }
 
@@ -1527,8 +1574,8 @@ function joinOnlineRoom(){
     roomCode,
     password
   },response=>{
-    if(!response?.ok){
-      setOnlineStatus(response?.error || "Could not join that room.",true);
+    if(!response || !response.ok){
+      setOnlineStatus((response && response.error) || "Could not join that room.",true);
       return;
     }
 
@@ -1541,8 +1588,8 @@ function startOnlineGame(){
   if(!onlineRoomState) return;
 
   socket.emit("start-online-game",response=>{
-    if(!response?.ok){
-      setOnlineStatus(response?.error || "Could not start the match.",true);
+    if(!response || !response.ok){
+      setOnlineStatus((response && response.error) || "Could not start the match.",true);
     }
   });
 }
@@ -1567,9 +1614,8 @@ function leaveOnlineRoom(){
     setOnlineStatus("Left the room.");
   });
 }
-
 async function copyRoomCode(){
-  if(!onlineRoomState?.roomCode) return;
+  if(!onlineRoomState || !onlineRoomState.roomCode) return;
 
   try{
     await navigator.clipboard.writeText(onlineRoomState.roomCode);
@@ -1593,7 +1639,7 @@ socket.on("disconnect",()=>{
 });
 
 socket.on("action-error",payload=>{
-  setOnlineStatus(payload?.message || "Action failed.",true);
+  setOnlineStatus((payload && payload.message) || "Action failed.",true);
 });
 
 socket.on("room-state",payload=>{
@@ -1605,7 +1651,7 @@ socket.on("room-state",payload=>{
 
   syncModeUI();
 
-  if(!payload.started && !onlineGameState?.finished && !document.getElementById("winnerPopup")){
+  if(!payload.started && !(onlineGameState && onlineGameState.finished) && !document.getElementById("winnerPopup")){
     game.style.display="none";
     setup.style.display="block";
   }
@@ -1696,7 +1742,7 @@ function initBoard(){
 function handleClick(dot){
   if(gameFinished) return;
   if(isOnlineMode()){
-    if(!onlineRoomState?.started || !onlineGameState) return;
+    if(!(onlineRoomState && onlineRoomState.started) || !onlineGameState) return;
 
     const myPlayerIndex=onlineGameState.players.findIndex(player=>player.id===socket.id);
     if(myPlayerIndex===-1){
@@ -1727,8 +1773,8 @@ function handleClick(dot){
         socket.emit("play-move",{
           moveKey:edgeKey(a,b)
         },response=>{
-          if(!response?.ok){
-            setOnlineStatus(response?.error || "That move was rejected.",true);
+          if(!response || !response.ok){
+            setOnlineStatus((response && response.error) || "That move was rejected.",true);
           }
         });
       }else{
@@ -1794,7 +1840,11 @@ function getLineSet(extraMove){
 }
 
 function getLineMask(extraMove){
-  let mask=0n;
+  if(!BIGINT_AVAILABLE){
+    return null;
+  }
+
+  let mask=BIGINT_ZERO;
 
   for(const [a,b] of lines){
     const moveMeta=moveByKey.get(edgeKey(a,b));
@@ -1871,10 +1921,10 @@ function buildBoardGraph(){
   }
 
   const registerMove=(r1,c1,r2,c2)=>{
-      const key=edgeKeyFromCoords(r1,c1,r2,c2);
+    const key=edgeKeyFromCoords(r1,c1,r2,c2);
     const moveMeta={
       key,
-      bit:1n<<BigInt(moveLibrary.length),
+      bit:getBigIntBitValue(moveLibrary.length),
       a:dotAt(r1,c1),
       b:dotAt(r2,c2),
       boxes:getAdjacentBoxesFromCoords(r1,c1,r2,c2)
@@ -1900,7 +1950,10 @@ function buildBoardGraph(){
   }
 
   boxLibrary.forEach(boxRef=>{
-    boxRef.edgeBits=boxRef.edges.map(edge=>moveByKey.get(edge)?.bit || 0n);
+    boxRef.edgeBits=boxRef.edges.map(edge=>{
+      const moveMeta=moveByKey.get(edge);
+      return moveMeta && moveMeta.bit!==null ? moveMeta.bit : BIGINT_ZERO;
+    });
   });
 }
 
@@ -1921,10 +1974,14 @@ function countBoxSides(boxRef,lineSet){
 }
 
 function countBoxSidesFromMask(boxRef,lineMask){
+  if(!BIGINT_AVAILABLE || lineMask===null){
+    return 0;
+  }
+
   let sides=0;
 
   for(const bit of boxRef.edgeBits || []){
-    if(bit!==0n && (lineMask & bit)!==0n){
+    if(bit!==BIGINT_ZERO && (lineMask & bit)!==BIGINT_ZERO){
       sides++;
     }
   }
@@ -1953,11 +2010,14 @@ function inspectMoveMetaFromMask(move,lineMask){
 }
 
 function getAvailableMovesFromMask(lineMask){
-  return moveLibrary.filter(move=>(lineMask & move.bit)===0n);
+  if(!BIGINT_AVAILABLE || lineMask===null){
+    return [];
+  }
+  return moveLibrary.filter(move=>(lineMask & move.bit)===BIGINT_ZERO);
 }
 
 function orderMovesForExactSearch(moves,lineMask){
-  return moves
+    return moves
     .map(move=>({
       move:getMoveMeta(move),
       stats:inspectMoveMetaFromMask(move,lineMask)
@@ -2088,10 +2148,10 @@ function getAvailableMoves(){
 
 // Draw a colored line between two dots and store it in game state.
 function drawLine(a,b,options={}){
-  const ownerIndex=options.ownerIndex ?? currentPlayer;
-  const animate=options.animate ?? true;
-  const highlightLastMove=options.highlightLastMove ?? true;
-  const silent=options.silent ?? false;
+  const ownerIndex=typeof options.ownerIndex==="number" ? options.ownerIndex : currentPlayer;
+  const animate=typeof options.animate==="boolean" ? options.animate : true;
+  const highlightLastMove=typeof options.highlightLastMove==="boolean" ? options.highlightLastMove : true;
+  const silent=typeof options.silent==="boolean" ? options.silent : false;
 
   if(!silent){
     playLine();
@@ -2217,12 +2277,13 @@ function getDisplayName(name){
 }
 
 function getOnlinePlayersSnapshot(){
-  return onlineGameState?.players || [];
+  return onlineGameState && onlineGameState.players ? onlineGameState.players : [];
 }
 
 function isBotPlayerAtIndex(index){
   if(isOnlineMode()){
-    return Boolean(getOnlinePlayersSnapshot()?.[index]?.isBot);
+    const onlinePlayers=getOnlinePlayersSnapshot();
+    return Boolean(onlinePlayers[index] && onlinePlayers[index].isBot);
   }
   return players[index]===AI_PLAYER_ID;
 }
@@ -2241,7 +2302,8 @@ function hasCommentatorBot(){
 
 function getCommentatorPlayerName(){
   if(isOnlineMode()){
-    return getOnlinePlayersSnapshot().find(player=>player.isBot)?.name || AI_DISPLAY_NAME;
+    const commentator=getOnlinePlayersSnapshot().find(player=>player.isBot);
+    return commentator ? commentator.name : AI_DISPLAY_NAME;
   }
   return COMMENTATOR_NAME;
 }
@@ -2295,10 +2357,13 @@ function applyOnlineGameState(snapshot,previousSnapshot=null){
   scores=snapshot.scores.slice();
   currentPlayer=snapshot.currentPlayer;
 
-  const previousLineKeys=new Set((previousSnapshot?.lines || []).map(line=>line.key));
-  const previousBoxKeys=new Set((previousSnapshot?.boxes || []).map(box=>box.key));
-  const newLineKey=snapshot.lastMove?.key && !previousLineKeys.has(snapshot.lastMove.key)
-    ? snapshot.lastMove.key
+  const previousLines=previousSnapshot && previousSnapshot.lines ? previousSnapshot.lines : [];
+  const previousBoxes=previousSnapshot && previousSnapshot.boxes ? previousSnapshot.boxes : [];
+  const previousLineKeys=new Set(previousLines.map(line=>line.key));
+  const previousBoxKeys=new Set(previousBoxes.map(box=>box.key));
+  const lastMoveKey=snapshot.lastMove ? snapshot.lastMove.key : "";
+  const newLineKey=lastMoveKey && !previousLineKeys.has(lastMoveKey)
+    ? lastMoveKey
     : "";
   const newBoxKeys=new Set(
     (snapshot.boxes || [])
@@ -2309,10 +2374,10 @@ function applyOnlineGameState(snapshot,previousSnapshot=null){
 
   if(previousSnapshot){
     snapshot.scores.forEach((score,index)=>{
-      const previousScore=previousSnapshot.scores?.[index] || 0;
+      const previousScore=previousSnapshot.scores && previousSnapshot.scores[index] ? previousSnapshot.scores[index] : 0;
       for(let nextScore=previousScore+1; nextScore<=score; nextScore++){
         scoreEvents.push({
-          playerName:snapshot.players[index]?.name || players[index] || `P${index+1}`,
+          playerName:(snapshot.players[index] && snapshot.players[index].name) || players[index] || `P${index+1}`,
           scoreCount:nextScore
         });
       }
@@ -2325,9 +2390,8 @@ function applyOnlineGameState(snapshot,previousSnapshot=null){
     const moveMeta=moveByKey.get(line.key);
     if(!moveMeta) return;
 
-    const isLatestMove=line.key===snapshot.lastMove?.key;
+    const isLatestMove=line.key===lastMoveKey;
     const shouldAnimate=line.key===newLineKey;
-
     drawLine(moveMeta.a,moveMeta.b,{
       ownerIndex:line.ownerIndex,
       animate:shouldAnimate,
@@ -2356,8 +2420,7 @@ function applyOnlineGameState(snapshot,previousSnapshot=null){
   setup.style.display="none";
   game.style.display="flex";
   updateScore();
-  updateAIDifficultyStatus();
-  updateOnlineLobbyUI();
+    updateOnlineLobbyUI();
 
   if(snapshot.finished){
     if(!onlineWinnerShown){
@@ -2391,7 +2454,7 @@ function getAvailableMovesFromLineSet(lineSet){
 
 function summarizeReplyOptions(lineSet){
   let scoringMoves=0;
-    let safeMoves=0;
+  let safeMoves=0;
 
   for(const move of getAvailableMovesFromLineSet(lineSet)){
     const stats=inspectMoveMeta(move,lineSet);
@@ -2414,7 +2477,7 @@ function scoreMoveHeuristic(move,lineSet,playerIndex,movesLeft){
   score-=stats.createdThirdEdges*260;
   score-=stats.createdSecondEdges*28;
 
-  if(moveMeta?.isBoundary){
+  if(moveMeta && moveMeta.isBoundary){
     score+=18;
   }
 
@@ -2489,7 +2552,7 @@ function getLongSearchDepth(movesLeft){
 function shouldUseExactSolver(movesLeft){
   const extra=getCurrentAISettings().exactEndgameOffset || 0;
 
-  return players.length===2 && (
+  return BIGINT_AVAILABLE && players.length===2 && (
     size<=AI_EXACT_SEARCH_LIMITS.perfectGridSize ||
     movesLeft<=AI_EXACT_SEARCH_LIMITS.twoPlayerEndgameMoves+extra
   );
@@ -2761,7 +2824,7 @@ function aiMove(){
 
     updateScore();
     if(!gameFinished){
-      setTimeout(aiMove,300);
+          setTimeout(aiMove,300);
     }
   },30);
 }
@@ -2777,7 +2840,8 @@ function stopGame(){
   let ranking = players
     .map((p,i)=>({name:p, score:scores[i]}))
     .sort((a,b)=>b.score-a.score);
-  const aiWon=isBotPlayerName(ranking[0]?.name) && (!ranking[1] || ranking[0].score>ranking[1].score);
+  const topPlayer=ranking[0] ? ranking[0].name : "";
+  const aiWon=isBotPlayerName(topPlayer) && (!ranking[1] || ranking[0].score>ranking[1].score);
 
   let popup = document.createElement("div");
   popup.id="winnerPopup";
@@ -2841,7 +2905,7 @@ function stopGame(){
     c.className="confetti";
 
     c.style.left=Math.random()*100+"vw";
-        c.style.background=`hsl(${Math.random()*360},100%,50%)`;
+    c.style.background=`hsl(${Math.random()*360},100%,50%)`;
     c.style.animationDuration=(Math.random()*2+2)+"s";
 
     document.body.appendChild(c);
@@ -2964,11 +3028,11 @@ function startIntroFX(){
 
 function escapeHtml(text){
   return String(text)
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#39;");
+    .replace(/&/g,"&amp;")
+    .replace(/</g,"&lt;")
+    .replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;")
+    .replace(/'/g,"&#39;");
 }
 
 function resolveVoiceClipPath(clipPath){
@@ -3081,7 +3145,7 @@ function playNextVoiceInQueue(){
   };
 
   audio.onended=finish;
-    audio.onerror=finish;
+  audio.onerror=finish;
   audio.play().catch(finish);
 }
 
@@ -3112,10 +3176,20 @@ const ctx = canvas.getContext("2d");
 let particles = [];
 
 function resizeCanvas(){
-  canvas.width = window.innerWidth;
-  canvas.height = window.innerHeight;
+  const viewportWidth=Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, document.body ? document.body.clientWidth : 0);
+  const viewportHeight=Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, document.body ? document.body.clientHeight : 0);
+
+  canvas.width = viewportWidth;
+  canvas.height = viewportHeight;
 }
 window.addEventListener("resize", resizeCanvas);
+window.addEventListener("orientationchange", resizeCanvas);
+window.addEventListener("pageshow", resizeCanvas);
+document.addEventListener("visibilitychange",()=>{
+  if(!document.hidden){
+    resizeCanvas();
+  }
+});
 resizeCanvas();
 
 // create particles
@@ -3150,17 +3224,6 @@ function animateParticles(){
 
 animateParticles();
 
-</script>
-
-<script>
-window.addEventListener("load", () => {
-  setTimeout(() => {
-    const intro = document.getElementById("intro");
-    if (intro) {
-      intro.style.display = "none"; // 🔥 force remove
-    }
-  }, 5000);
-});
 </script>
   
 </body>
