@@ -1003,7 +1003,7 @@ let aiSearchDeadline=0;
 // Dot size is reused for board spacing math.
 const DOT=22;
 const BOARD_PADDING=14;
-const MOBILE_MIN_GAP=34;
+const MOBILE_MIN_GAP=24;
 const DESKTOP_MIN_GAP=28;
 const MAX_GAP=56;
 const LARGE_BOARD_MAX_GAP=92;
@@ -1349,10 +1349,13 @@ function getOnlinePlayerName(){
 
 function getBoardGapForSize(boardSize){
   const isPhone=window.innerWidth<=640;
-  const maxBoard=Math.min(window.innerWidth-48,window.innerHeight-180);
+  const isCompactLayout=window.innerWidth<=520;
+  const horizontalRoom=isCompactLayout ? 28 : 48;
+  const maxBoard=Math.min(window.innerWidth-horizontalRoom,window.innerHeight-180);
   const minGap=isPhone ? MOBILE_MIN_GAP : DESKTOP_MIN_GAP;
   const dynamicMaxGap=boardSize<=4 ? SMALL_BOARD_MAX_GAP : boardSize<=6 ? 110 : LARGE_BOARD_MAX_GAP;
-  return Math.max(minGap,Math.min(dynamicMaxGap,maxBoard/(boardSize-1)));
+  const fitGap=(maxBoard-DOT-BOARD_PADDING*2)/Math.max(1,boardSize-1);
+  return Math.max(minGap,Math.min(dynamicMaxGap,fitGap));
 }
 
 function resetRoundFeedbackState(){
@@ -1708,7 +1711,8 @@ function startGame(){
 }
 
 // Build the visible dot grid based on selected size.
-function initBoard(){
+function initBoard(options={}){
+  const resetScroll=options.resetScroll!==false;
   board.innerHTML="";
   dots=[];lines=[];boxes=[];
   moveLibrary=[];
@@ -1719,7 +1723,7 @@ function initBoard(){
   board.style.width=boardSize+"px";
   board.style.height=boardSize+"px";
   const boardFrame=document.getElementById("boardFrame");
-  if(boardFrame){
+  if(boardFrame && resetScroll){
     boardFrame.scrollLeft=0;
     boardFrame.scrollTop=0;
   }
@@ -2372,6 +2376,9 @@ function applyOnlineGameState(snapshot,previousSnapshot=null){
       .filter(boxKey=>!previousBoxKeys.has(boxKey))
   );
   const scoreEvents=[];
+  const boardFrame=document.getElementById("boardFrame");
+  const preservedScrollLeft=boardFrame ? boardFrame.scrollLeft : 0;
+  const preservedScrollTop=boardFrame ? boardFrame.scrollTop : 0;
 
   if(previousSnapshot){
     snapshot.scores.forEach((score,index)=>{
@@ -2385,7 +2392,14 @@ function applyOnlineGameState(snapshot,previousSnapshot=null){
     });
   }
 
-  initBoard();
+  initBoard({resetScroll:false});
+
+  if(boardFrame){
+    const maxScrollLeft=Math.max(0,boardFrame.scrollWidth-boardFrame.clientWidth);
+    const maxScrollTop=Math.max(0,boardFrame.scrollHeight-boardFrame.clientHeight);
+    boardFrame.scrollLeft=Math.min(preservedScrollLeft,maxScrollLeft);
+    boardFrame.scrollTop=Math.min(preservedScrollTop,maxScrollTop);
+  }
 
   snapshot.lines.forEach(line=>{
     const moveMeta=moveByKey.get(line.key);
